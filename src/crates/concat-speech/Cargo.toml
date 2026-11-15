@@ -39,6 +39,10 @@ tokenizers = { version = "0.23", optional = true, default-features = false, feat
 # terminal both get it; see concat-host's logs.rs.
 log = { version = "0.4", features = ["std"] }
 
+# A caption segment crosses the API boundary, so the schema feature mirrors
+# the other crates: concat-api's request schema names it under `$defs`.
+schemars = { workspace = true, optional = true }
+
 # Transcription: whisper.cpp in-process. Built from source by cmake at build
 # time; on macOS with Metal so the encoder runs on the GPU. `raw-api` for
 # ggml's backend registry: where whisper.cpp is a shared build, its CPU
@@ -88,6 +92,8 @@ ort = { workspace = true, optional = true, features = ["directml"] }
 
 [features]
 chatterbox = ["dep:ort", "dep:tokenizers", "dep:concat-vision"]
+# JSON Schemas for the types a request carries, for concat-api's schema.
+schema = ["dep:schemars"]
 
 [lints]
 workspace = true

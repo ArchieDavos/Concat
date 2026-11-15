@@ -40,6 +40,9 @@ mod gpu;
 mod grading;
 mod host;
 mod i18n;
+/// Files another process puts into the open project; see the module.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod inbox;
 /// The iPhone's pickers and its way to Photos; see the module.
 #[cfg(target_os = "ios")]
 mod ios;
@@ -284,6 +287,8 @@ fn start(project: Option<std::path::PathBuf>, smoke: bool) -> Result<(), slint::
                     }
                 }
             });
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            inbox::close();
             // What `run` returning would have done next, had it returned.
             if terminating.get() {
                 stop_exports();
@@ -2499,8 +2504,26 @@ fn start(project: Option<std::path::PathBuf>, smoke: bool) -> Result<(), slint::
         Shell::with(|_, app| platform::apply_ui_scale(app.window()));
     });
 
+    // Files a helper on this machine hands the open project - the gallery
+    // bridge - looked for twice a second; see `inbox`.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let inbox_watch = {
+        let timer = slint::Timer::default();
+        timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(500),
+            inbox::tick,
+        );
+        timer
+    };
+
     let result = app.run();
     drop(reader_sweep);
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        drop(inbox_watch);
+        inbox::close();
+    }
     log::info!("close: event loop exited (ok={})", result.is_ok());
     // The loop failing is the window never having run at all - on a phone
     // whose Vulkan driver wgpu will not take, it is the whole launch, and

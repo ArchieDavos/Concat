@@ -253,6 +253,7 @@ pub struct TranscriberStatus {
 }
 
 /// One caption, in seconds relative to the transcribed window's start.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Segment {
@@ -280,6 +281,12 @@ pub struct TranscribeRequest {
     pub window: f64,
     /// Which model to use, e.g. "base.en".
     pub model_id: String,
+    /// The spoken language as an ISO 639-1 code ("pl", "en"), when the
+    /// caller knows it. `None` lets a multilingual model detect the
+    /// language from the first window, which short or quiet windows get
+    /// wrong often enough to matter; an English-only model is told "en"
+    /// whatever this says.
+    pub language: Option<String>,
 }
 
 struct LoadedModel {
@@ -480,16 +487,18 @@ impl Transcriber {
             .unwrap_or(4);
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_n_threads(threads as i32);
-        // The language is whisper's to hear, when it can hear more than
-        // one: a multilingual model detects it from the first window. An
-        // English-only model asked for "auto" still runs the detection,
-        // over a vocabulary it was never trained on, and "hears" Thai at
-        // one percent - so it is simply told English.
-        params.set_language(Some(if context.is_multilingual() {
-            "auto"
-        } else {
-            "en"
-        }));
+        // The language: what the caller named wins. Otherwise it is
+        // whisper's to hear, when it can hear more than one: a multilingual
+        // model detects it from the first window. An English-only model
+        // asked for "auto" still runs the detection, over a vocabulary it
+        // was never trained on, and "hears" Thai at one percent - so it is
+        // simply told English.
+        let language = match &request.language {
+            Some(code) => code.clone(),
+            None if context.is_multilingual() => "auto".to_owned(),
+            None => "en".to_owned(),
+        };
+        params.set_language(Some(&language));
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -637,6 +646,7 @@ mod real_audio {
             source_start: 0.0,
             window: 30.0,
             model_id: "tiny.en".to_owned(),
+            language: None,
         };
         let segments = transcriber
             .transcribe(&dirs, &request, |stage| eprintln!("{stage:?}"))

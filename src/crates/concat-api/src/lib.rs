@@ -51,10 +51,12 @@ use concat_host::templates::{self, SlotFill};
 use concat_host::{ProjectInfo, Session, Titles, lock, media, projects};
 use concat_project::Command;
 use concat_project::model::VideoSettings;
+use concat_speech::transcribe::{TranscribeRequest, Transcriber};
 
 pub use message::{
     API_VERSION, ApiError, Dirs, Done, ErrorCode, Event, ExportSpec, Fill, JobState, JobStatus,
-    PackageInfo, ParamInfo, Picture, Reply, Request, Response, Started, VersionInfo, Written,
+    PackageInfo, ParamInfo, Picture, Reply, Request, Response, Segment, Started, VersionInfo,
+    Written,
 };
 
 /// The export sheet's middle quality, and what an export gets when the
@@ -234,6 +236,7 @@ pub struct Api {
     titles: Titles,
     cutouts: Arc<Cutouts>,
     stabilizers: Arc<Stabilizers>,
+    transcriber: Transcriber,
     monitor: Monitor,
     exporter: Exporter,
     events: EventSink,
@@ -293,6 +296,7 @@ impl Api {
             titles: Titles::new(&dirs),
             cutouts: Arc::new(Cutouts::new(&dirs.data)),
             stabilizers: Arc::new(Stabilizers::new()),
+            transcriber: Transcriber::new(),
             monitor: Monitor::new(),
             exporter: Exporter::new(),
             sessions: BTreeMap::new(),
@@ -462,6 +466,23 @@ impl Api {
                 Ok(Reply::Media(media::probe(&path).map_err(ApiError::failed)?))
             }
             Request::MediaImport { path, file } => view(self.import(&path, &file)?),
+            Request::MediaTranscribe {
+                path,
+                audio_stream,
+                source_start,
+                window,
+                model_id,
+                language,
+            } => Ok(Reply::Segments(
+                self.transcribe(
+                    &path,
+                    audio_stream,
+                    source_start.unwrap_or(0.0),
+                    window,
+                    &model_id,
+                    language.as_deref(),
+                )?,
+            )),
             Request::CatalogueList { kind } => Ok(Reply::Packages(catalogue(kind.as_deref())?)),
             Request::TemplateList => Ok(Reply::Templates(templates::list(&self.dirs.config))),
             Request::TemplateInstantiate {
@@ -610,6 +631,43 @@ impl Api {
     pub fn import(&mut self, path: &str, file: &str) -> Result<EditorView, ApiError> {
         let item = media::probe(file).map_err(ApiError::failed)?.to_new_media();
         self.apply(path, Command::AddMedia { item })
+    }
+
+    /// [`Request::MediaTranscribe`]: the window's Captions sheet as one
+    /// call, over any file - no project involved. Runs on the caller's
+    /// thread and can keep it for minutes on a long window: a transport
+    /// serves one caller at a time, and so does the window's worker, so
+    /// nothing else is starved that would not be by the sheet.
+    pub fn transcribe(
+        &self,
+        path: &str,
+        audio_stream: Option<u32>,
+        source_start: f64,
+        window: f64,
+        model_id: &str,
+        language: Option<&str>,
+    ) -> Result<Vec<Segment>, ApiError> {
+        if source_start < 0.0 || source_start.is_nan() {
+            return Err(ApiError::invalid(
+                "sourceStart must be a non-negative number of seconds",
+            ));
+        }
+        if window <= 0.0 || window.is_nan() {
+            return Err(ApiError::invalid(
+                "window must be a positive number of seconds",
+            ));
+        }
+        let request = TranscribeRequest {
+            path: path.to_owned(),
+            audio_stream,
+            source_start,
+            window,
+            model_id: model_id.to_owned(),
+            language: language.map(str::to_owned),
+        };
+        self.transcriber
+            .transcribe(&self.dirs, &request, |_| {})
+            .map_err(ApiError::failed)
     }
 
     /// [`Request::TemplateInstantiate`].
@@ -1473,6 +1531,43 @@ mod tests {
         }));
         assert_eq!(refused, not_open("/never"));
         assert_eq!(refused.code, ErrorCode::NotOpen);
+    }
+
+    /// Transcription validates its window before touching a model, and a
+    /// model that is not downloaded fails as a sentence, not a crash.
+    #[test]
+    fn transcription_refuses_bad_windows_and_missing_models() {
+        let (mut api, _scratch, _) = api();
+        for window in [0.0, -5.0, f64::NAN] {
+            let refused = err(api.dispatch(Request::MediaTranscribe {
+                path: "/nowhere/a.mp4".to_owned(),
+                audio_stream: None,
+                source_start: None,
+                window,
+                model_id: "tiny".to_owned(),
+                language: None,
+            }));
+            assert_eq!(refused.code, ErrorCode::Invalid, "window {window}");
+        }
+        let missing = err(api.dispatch(Request::MediaTranscribe {
+            path: "/nowhere/a.mp4".to_owned(),
+            audio_stream: None,
+            source_start: Some(-1.0),
+            window: 10.0,
+            model_id: "tiny".to_owned(),
+            language: None,
+        }));
+        assert_eq!(missing.code, ErrorCode::Invalid, "a negative sourceStart");
+        let missing = err(api.dispatch(Request::MediaTranscribe {
+            path: "/nowhere/a.mp4".to_owned(),
+            audio_stream: None,
+            source_start: None,
+            window: 10.0,
+            model_id: "tiny".to_owned(),
+            language: None,
+        }));
+        assert_eq!(missing.code, ErrorCode::Failed);
+        assert!(missing.message.contains("tiny"), "{}", missing.message);
     }
 
     #[test]

@@ -32,6 +32,7 @@ use concat_host::templates::TemplateInfo;
 use concat_host::{AppDirs, ProjectInfo};
 use concat_project::Command;
 use concat_project::model::VideoSettings;
+pub use concat_speech::transcribe::Segment;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -156,6 +157,35 @@ pub enum Request {
         path: String,
         /// The file to import.
         file: String,
+    },
+    /// Transcribes a media file's audio into caption segments with the
+    /// local Whisper model, the way the window's Captions sheet does.
+    /// Nothing about a project: a standalone file in, segments out.
+    /// Blocking: the run happens on the caller's thread, and a long window
+    /// keeps every other request waiting.
+    #[serde(rename = "media.transcribe")]
+    MediaTranscribe {
+        /// The media file.
+        path: String,
+        /// Which of the file's audio streams, by index; `None` is the
+        /// first - the same choice the clip's playback makes.
+        #[serde(default)]
+        audio_stream: Option<u32>,
+        /// Seconds into the file where the transcribed window begins.
+        /// 0 when absent.
+        #[serde(default)]
+        source_start: Option<f64>,
+        /// How much source to transcribe, in seconds.
+        window: f64,
+        /// Which model to use, e.g. "tiny". The file must already be in
+        /// the models folder - see Settings > Transcriber in the window.
+        model_id: String,
+        /// The spoken language as an ISO 639-1 code ("pl", "en"), when
+        /// known; absent lets the model detect it, which short windows get
+        /// wrong often enough to matter. An English-only model always
+        /// hears English.
+        #[serde(default)]
+        language: Option<String>,
     },
 
     /// Every effect package the build knows, with its parameters, so a
@@ -319,6 +349,8 @@ pub enum Reply {
     Document(Value),
     /// [`Request::MediaProbe`].
     Media(MediaSummary),
+    /// [`Request::MediaTranscribe`].
+    Segments(Vec<Segment>),
     /// [`Request::CatalogueList`].
     Packages(Vec<PackageInfo>),
     /// [`Request::TemplateList`].

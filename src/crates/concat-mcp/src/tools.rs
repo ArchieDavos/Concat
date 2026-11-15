@@ -254,6 +254,14 @@ pub fn catalogue() -> Vec<Tool> {
         )
         .idempotent(),
         method(
+            "media_transcribe",
+            "Transcribe media",
+            "Turns a media file's audio into caption segments with the local Whisper transcriber, as the window's Captions sheet does - no project needed. `path` is the file, `window` how many seconds from `sourceStart` (0 when absent) to transcribe, `audioStream` which of the file's audio streams (the first when absent), `modelId` the Whisper model (e.g. \"tiny\"; the model file must already be in the models folder - Settings > Transcriber in the window), `language` the spoken language as an ISO 639-1 code like \"pl\" (absent: the model detects it, which short windows get wrong often). Segments come back as `start`/`end` in seconds relative to `sourceStart` and their `text`. Blocking: a long window takes minutes, and nothing else is served until it ends.",
+            "media.transcribe",
+            Raw,
+        )
+        .reading(),
+        method(
             "edit_apply",
             "Apply an edit",
             "Applies any one edit command to an open project, as one undoable step. `command` is an object tagged by `op` - every edit the window can make is one, with the same limits and refusals; the typed tools below are the common ones. `{\"op\": \"batch\", \"commands\": [...]}` applies several commands as one atomic, undoable step: all land or none does, and `createdId` is the last id minted inside. A refusal comes back as the sentence the window would show, with nothing changed. Returns the project summary; a command that creates something puts its id in `createdId`.",
@@ -964,6 +972,10 @@ mod tests {
             (
                 "media_import",
                 json!({ "path": "/tmp/Cut", "file": "/tmp/a.mp4" }),
+            ),
+            (
+                "media_transcribe",
+                json!({ "path": "/tmp/a.mp4", "window": 30.0, "modelId": "tiny" }),
             ),
             (
                 "edit_apply",
